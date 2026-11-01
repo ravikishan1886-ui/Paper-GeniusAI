@@ -63,7 +63,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </span>
                 <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
                   <Sparkles className="w-2.5 h-2.5 mr-0.5 text-indigo-500" />
-                  Gemini
+                  Groq AI
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 hidden sm:block font-medium">

@@ -354,7 +354,7 @@ export function exportPaperToPDF(paper: QuestionPaper, options: PDFExportOptions
       doc.setTextColor(148, 163, 184); // slate-400
 
       // Left footer
-      doc.text('Paper Genius AI • Generated with Google Gemini', margin, pageHeight - 8);
+      doc.text('Paper Genius AI • Smart Question Paper Generator', margin, pageHeight - 8);
 
       // Center footer watermark indicator
       if (watermark && watermark.enabled) {

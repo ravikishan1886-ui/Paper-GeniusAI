@@ -91,13 +91,30 @@ export interface QuestionPaper {
   maxMarks: number;
   totalCalculatedMarks: number;
   difficulty: string;
-  syllabusType: 'complete' | 'chapters' | 'topics' | 'custom';
+  syllabusType: 'complete' | 'chapters' | 'topics' | 'custom' | 'textbook_images';
   syllabusText?: string;
   chapters: string[];
+  textbookImages?: {
+    id: string;
+    name: string;
+    mimeType: string;
+    data: string; // base64
+    previewUrl?: string;
+  }[];
   generalInstructions: string[];
   sections: Section[];
   answerKey: AnswerItem[];
   watermark: WatermarkConfig;
+}
+
+export interface TextbookAnalysisResult {
+  detectedSubject: string;
+  detectedClass: string;
+  detectedChapter: string;
+  keyTopics: string[];
+  summary: string;
+  extractedFormulas: string[];
+  recommendedExamTitle: string;
 }
 
 export interface GeneratePaperRequest {
@@ -113,9 +130,15 @@ export interface GeneratePaperRequest {
   durationMinutes: number;
   maxMarks: number;
   difficulty: string;
-  syllabusType: 'complete' | 'chapters' | 'topics' | 'custom';
+  syllabusType: 'complete' | 'chapters' | 'topics' | 'custom' | 'textbook_images';
   syllabusText?: string;
   chapters: string[];
+  textbookImages?: {
+    id: string;
+    name: string;
+    mimeType: string;
+    data: string; // base64
+  }[];
   sections: {
     id: string;
     name: string;
@@ -143,3 +166,4 @@ export interface BankQuestion {
   solution?: string;
   createdAt: string;
 }
+

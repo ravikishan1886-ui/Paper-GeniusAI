@@ -1,30 +1,44 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Sparkles,
-  Layers,
   Calculator,
   CheckCircle,
   AlertTriangle,
   Plus,
   Trash2,
   BookOpen,
-  Settings,
   ChevronRight,
   ChevronLeft,
-  FileText,
   Clock,
   RotateCcw,
-  HelpCircle,
+  Camera,
+  Image as ImageIcon,
+  Eye,
+  FileUp,
+  Scan,
+  Loader2,
+  CheckCircle2,
+  ArrowRight,
+  X,
+  Key,
+  ExternalLink,
 } from 'lucide-react';
 import {
   BOARDS,
   CLASSES,
-  SUBJECT_CHAPTERS,
-  EXAM_TYPES,
   STANDARD_TEMPLATES,
 } from '../data/curriculum';
-import { QuestionPaper, QuestionType, WatermarkConfig } from '../types';
+import { QuestionPaper, QuestionType, WatermarkConfig, TextbookAnalysisResult } from '../types';
 import { DEFAULT_WATERMARK } from '../utils/storage';
+
+interface UploadedTextbookImage {
+  id: string;
+  name: string;
+  mimeType: string;
+  data: string; // base64
+  previewUrl: string;
+  size: number;
+}
 
 interface GeneratePaperViewProps {
   onPaperGenerated: (paper: QuestionPaper) => void;
@@ -35,26 +49,38 @@ export const GeneratePaperView: React.FC<GeneratePaperViewProps> = ({
   onPaperGenerated,
   watermarkSettings,
 }) => {
-  const [step, setStep] = useState<1 | 2 | 3>(1);
+  // Pure 2-Step Flow
+  const [step, setStep] = useState<1 | 2>(1);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
 
-  // Step 1: Education Details
-  const [country, setCountry] = useState('India');
-  const [board, setBoard] = useState('CBSE');
-  const [classLevel, setClassLevel] = useState('Class 10');
-  const [academicYear, setAcademicYear] = useState('2026-2027');
+  // User Groq API Key management
+  const [userGroqKey, setUserGroqKey] = useState<string>(
+    () => localStorage.getItem('paper_genius_groq_key') || ''
+  );
+  const [showKeyModal, setShowKeyModal] = useState(false);
+  const [keyInput, setKeyInput] = useState(userGroqKey);
+  const [rateLimitNotice, setRateLimitNotice] = useState(false);
+
+  // Step 1: Textbook Page Images & Vision Analysis
+  const [uploadedImages, setUploadedImages] = useState<UploadedTextbookImage[]>([]);
+  const [analyzingImages, setAnalyzingImages] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState<TextbookAnalysisResult | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [previewModalImg, setPreviewModalImg] = useState<string | null>(null);
+
+  // Academic Details (Extracted & User Adjusted)
   const [subject, setSubject] = useState('Science');
-  const [examType, setExamType] = useState('Annual Board Examination');
-  const [language, setLanguage] = useState('English');
+  const [classLevel, setClassLevel] = useState('Class 10');
+  const [board, setBoard] = useState('CBSE');
+  const [country, setCountry] = useState('India');
+  const [chapterTitle, setChapterTitle] = useState('');
   const [instituteName, setInstituteName] = useState('Delhi Public Senior Secondary School');
+  const [academicYear, setAcademicYear] = useState('2026-2027');
+  const [language, setLanguage] = useState('English');
 
-  // Step 2: Syllabus Scope
-  const [syllabusType, setSyllabusType] = useState<'complete' | 'chapters' | 'topics' | 'custom'>('complete');
-  const [selectedChapters, setSelectedChapters] = useState<string[]>([]);
-  const [customSyllabusText, setCustomSyllabusText] = useState('');
-  const [chapterInput, setChapterInput] = useState('');
-
-  // Step 3: Exam Settings & Marks Distribution
-  const [paperTitle, setPaperTitle] = useState('Class 10 Science Annual Examination 2026-27');
+  // Step 2: Exam Settings & Marks Distribution
+  const [paperTitle, setPaperTitle] = useState('Class 10 Science - Textbook Examination 2026-27');
   const [maxMarks, setMaxMarks] = useState<number>(50);
   const [durationMinutes, setDurationMinutes] = useState<number>(90);
   const [difficulty, setDifficulty] = useState('Balanced (Standard)');
@@ -104,27 +130,137 @@ export const GeneratePaperView: React.FC<GeneratePaperViewProps> = ({
   const [genStage, setGenStage] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
-  // Available chapters for the selected subject
-  const availableChapters = SUBJECT_CHAPTERS[subject] || [
-    'Introduction & Core Concepts',
-    'Foundational Principles',
-    'Applied Methodology',
-    'Advanced Problem Solving',
-    'Practical Case Studies',
-  ];
-
-  // Update paper title when subject or class changes
-  useEffect(() => {
-    setPaperTitle(`${classLevel} ${subject} ${examType}`);
-  }, [classLevel, subject, examType]);
-
   // Calculate total marks across sections
   const totalCalculatedMarks = sections.reduce(
     (sum, sec) => sum + (Number(sec.questionCount) || 0) * (Number(sec.marksPerQuestion) || 0),
     0
   );
-
   const marksMatch = totalCalculatedMarks === Number(maxMarks);
+
+  // Save user custom Groq key
+  const handleSaveGroqKey = (key: string) => {
+    const trimmed = key.trim();
+    setUserGroqKey(trimmed);
+    localStorage.setItem('paper_genius_groq_key', trimmed);
+    setShowKeyModal(false);
+    setRateLimitNotice(false);
+  };
+
+  // Helper to get request headers with custom Groq key
+  const getRequestHeaders = () => {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (userGroqKey && userGroqKey.trim()) {
+      headers['x-groq-api-key'] = userGroqKey.trim();
+    }
+    return headers;
+  };
+
+  // Handle uploading textbook page images
+  const handleFileUpload = (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const newItems: UploadedTextbookImage[] = [];
+    const fileArray = Array.from(files);
+
+    let processed = 0;
+    fileArray.forEach((file) => {
+      if (!file.type.startsWith('image/')) {
+        processed++;
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const resultStr = e.target?.result as string;
+        newItems.push({
+          id: 'img-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7),
+          name: file.name,
+          mimeType: file.type || 'image/jpeg',
+          data: resultStr,
+          previewUrl: resultStr,
+          size: file.size,
+        });
+        processed++;
+        if (processed === fileArray.length) {
+          setUploadedImages((prev) => [...prev, ...newItems]);
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleRemoveImage = (id: string) => {
+    setUploadedImages((prev) => {
+      const remaining = prev.filter((img) => img.id !== id);
+      if (remaining.length === 0) {
+        setAnalysisResult(null);
+      }
+      return remaining;
+    });
+  };
+
+  // Analyze textbook images with Groq AI Vision
+  const handleAnalyzeImages = async () => {
+    if (uploadedImages.length === 0) return;
+    setAnalyzingImages(true);
+    setAnalysisError(null);
+
+    try {
+      const response = await fetch('/api/analyze-textbook', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify({
+          images: uploadedImages.map((img) => ({
+            name: img.name,
+            mimeType: img.mimeType,
+            data: img.data,
+          })),
+        }),
+      });
+
+      const res = await response.json();
+
+      if (response.status === 429 || res.rateLimitExceeded) {
+        setRateLimitNotice(true);
+        setShowKeyModal(true);
+        throw new Error('Groq API rate limit exceeded. Please enter your personal Groq API key.');
+      }
+
+      if (!res.success || !res.analysis) {
+        throw new Error(res.error || 'Vision analysis could not be completed.');
+      }
+
+      const analysis = res.analysis;
+      setAnalysisResult(analysis);
+
+      // Auto-apply findings
+      if (analysis.detectedSubject) setSubject(analysis.detectedSubject);
+      if (analysis.detectedClass) setClassLevel(analysis.detectedClass);
+      if (analysis.detectedChapter) setChapterTitle(analysis.detectedChapter);
+      if (analysis.recommendedExamTitle) setPaperTitle(analysis.recommendedExamTitle);
+    } catch (err: any) {
+      console.error(err);
+      setAnalysisError(err?.message || 'Failed to analyze textbook pages.');
+    } finally {
+      setAnalyzingImages(false);
+    }
+  };
+
+  // Auto-balance marks to equal maxMarks
+  const handleAutoBalance = () => {
+    const diff = Number(maxMarks) - totalCalculatedMarks;
+    if (diff === 0 || sections.length === 0) return;
+
+    const newSections = [...sections];
+    const lastSec = newSections[newSections.length - 1];
+    const m = lastSec.marksPerQuestion || 1;
+    const extraQuestions = Math.round(diff / m);
+
+    if (lastSec.questionCount + extraQuestions > 0) {
+      lastSec.questionCount += extraQuestions;
+      setSections(newSections);
+    } else {
+      setMaxMarks(totalCalculatedMarks);
+    }
+  };
 
   // Apply a pre-built template
   const applyTemplate = (templateName: string) => {
@@ -140,27 +276,6 @@ export const GeneratePaperView: React.FC<GeneratePaperViewProps> = ({
     );
   };
 
-  // Auto-balance marks to equal maxMarks
-  const handleAutoBalance = () => {
-    const diff = Number(maxMarks) - totalCalculatedMarks;
-    if (diff === 0 || sections.length === 0) return;
-
-    // Distribute difference or adjust last section
-    const newSections = [...sections];
-    const lastSec = newSections[newSections.length - 1];
-    const m = lastSec.marksPerQuestion || 1;
-    const extraQuestions = Math.round(diff / m);
-
-    if (lastSec.questionCount + extraQuestions > 0) {
-      lastSec.questionCount += extraQuestions;
-      setSections(newSections);
-    } else {
-      // Adjust max marks to match
-      setMaxMarks(totalCalculatedMarks);
-    }
-  };
-
-  // Add a new section
   const handleAddSection = () => {
     const nextLetter = String.fromCharCode(65 + sections.length);
     setSections([
@@ -177,35 +292,21 @@ export const GeneratePaperView: React.FC<GeneratePaperViewProps> = ({
     ]);
   };
 
-  // Remove a section
   const handleRemoveSection = (index: number) => {
     if (sections.length <= 1) return;
     setSections(sections.filter((_, i) => i !== index));
   };
 
-  // Toggle chapter selection
-  const toggleChapter = (chapterName: string) => {
-    if (selectedChapters.includes(chapterName)) {
-      setSelectedChapters(selectedChapters.filter((c) => c !== chapterName));
-    } else {
-      setSelectedChapters([...selectedChapters, chapterName]);
-    }
-  };
-
-  // Add custom chapter tag
-  const handleAddCustomChapter = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!chapterInput.trim()) return;
-    if (!selectedChapters.includes(chapterInput.trim())) {
-      setSelectedChapters([...selectedChapters, chapterInput.trim()]);
-    }
-    setChapterInput('');
-  };
-
-  // Main Generation Handler
+  // Main Generation Handler using Groq API
   const handleGenerate = async () => {
     if (!marksMatch) {
       setError(`Marks mismatch: Sections total (${totalCalculatedMarks}) does not equal Maximum Marks (${maxMarks}). Please auto-balance or adjust sections.`);
+      return;
+    }
+
+    if (uploadedImages.length === 0) {
+      setError('Please upload at least one textbook page image in Step 1 to generate questions.');
+      setStep(1);
       return;
     }
 
@@ -213,13 +314,13 @@ export const GeneratePaperView: React.FC<GeneratePaperViewProps> = ({
     setGenerating(true);
     setGenStage(1);
 
-    const timer1 = setTimeout(() => setGenStage(2), 1500);
-    const timer2 = setTimeout(() => setGenStage(3), 3200);
+    const timer1 = setTimeout(() => setGenStage(2), 1600);
+    const timer2 = setTimeout(() => setGenStage(3), 3400);
 
     try {
       const response = await fetch('/api/generate-paper', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getRequestHeaders(),
         body: JSON.stringify({
           title: paperTitle,
           instituteName,
@@ -228,20 +329,31 @@ export const GeneratePaperView: React.FC<GeneratePaperViewProps> = ({
           classLevel,
           academicYear,
           subject,
-          examType,
+          examType: 'Textbook Chapter Examination',
           language,
           durationMinutes,
           maxMarks,
           difficulty,
-          syllabusType,
-          syllabusText: customSyllabusText,
-          chapters: selectedChapters.length > 0 ? selectedChapters : availableChapters.slice(0, 4),
+          syllabusType: 'textbook_images',
+          chapters: chapterTitle ? [chapterTitle] : [`${subject} Chapter`],
           sections,
+          textbookImages: uploadedImages.map((img) => ({
+            name: img.name,
+            mimeType: img.mimeType,
+            data: img.data,
+          })),
           watermark: watermarkSettings || DEFAULT_WATERMARK,
         }),
       });
 
       const data = await response.json();
+
+      if (response.status === 429 || data.rateLimitExceeded) {
+        setRateLimitNotice(true);
+        setShowKeyModal(true);
+        throw new Error('Groq API rate limit exceeded. Please enter your personal Groq API key.');
+      }
+
       if (!data.success) {
         throw new Error(data.error || 'Failed to generate question paper');
       }
@@ -251,7 +363,7 @@ export const GeneratePaperView: React.FC<GeneratePaperViewProps> = ({
       onPaperGenerated(data.paper);
     } catch (err: any) {
       console.error(err);
-      setError(err?.message || 'Error occurred while generating paper. Please check server connection.');
+      setError(err?.message || 'Error occurred while generating paper.');
       setGenerating(false);
     }
   };
@@ -277,39 +389,57 @@ export const GeneratePaperView: React.FC<GeneratePaperViewProps> = ({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-5">
         <div>
           <div className="inline-flex items-center space-x-2 text-indigo-600 font-bold text-xs uppercase tracking-wider mb-1">
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>AI Question Paper Generator</span>
+            <Camera className="w-3.5 h-3.5" />
+            <span>Textbook AI Question Paper Generator</span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
-            Design Your Examination Paper
+            Create Question Paper from Textbook Pages
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 mt-1">
-            Configure educational board, chapters, questions, and intelligent marks distribution.
+            Upload textbook photos or scans. Groq AI analyzes the images and formats authentic questions in 2 simple steps.
           </p>
         </div>
 
-        {/* Step Indicator */}
-        <div className="flex items-center space-x-2 self-start sm:self-auto">
-          {[
-            { num: 1, label: 'Education' },
-            { num: 2, label: 'Syllabus' },
-            { num: 3, label: 'Sections & Marks' },
-          ].map((s) => (
-            <div
-              key={s.num}
-              onClick={() => !generating && setStep(s.num as any)}
-              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-colors ${
-                step === s.num
-                  ? 'bg-indigo-600 text-white shadow-2xs'
-                  : step > s.num
-                  ? 'bg-indigo-50 text-indigo-700'
-                  : 'bg-slate-100 text-slate-400'
+        {/* 2-Step Indicator & API Key Pill */}
+        <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+          {/* Custom Groq Key Badge */}
+          <button
+            onClick={() => {
+              setKeyInput(userGroqKey);
+              setShowKeyModal(true);
+            }}
+            className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+              userGroqKey
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
+            }`}
+          >
+            <Key className="w-3.5 h-3.5" />
+            <span>{userGroqKey ? 'Custom Groq Key: Active' : 'Configure Groq API Key'}</span>
+          </button>
+
+          {/* Steps */}
+          <div className="flex items-center space-x-1 bg-slate-100 p-1 rounded-xl">
+            <button
+              onClick={() => setStep(1)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+                step === 1 ? 'bg-indigo-600 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <span>{s.num}.</span>
-              <span className="hidden md:inline">{s.label}</span>
-            </div>
-          ))}
+              1. Upload Textbook Pages
+            </button>
+            <button
+              onClick={() => {
+                if (uploadedImages.length > 0) setStep(2);
+                else setError('Please upload at least one textbook page image first.');
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+                step === 2 ? 'bg-indigo-600 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              2. Marks & Sections
+            </button>
+          </div>
         </div>
       </div>
 
@@ -318,306 +448,309 @@ export const GeneratePaperView: React.FC<GeneratePaperViewProps> = ({
         <div className="p-4 bg-red-50 border border-red-200 rounded-2xl flex items-start space-x-3 text-xs text-red-700">
           <AlertTriangle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
           <div className="flex-1 space-y-1">
-            <p className="font-bold">Generation Notice</p>
+            <p className="font-bold">Notice</p>
             <p>{error}</p>
           </div>
         </div>
       )}
 
-      {/* STEP 1: EDUCATION DETAILS */}
+      {/* STEP 1: UPLOAD TEXTBOOK PAGE IMAGES & VISION ANALYSIS */}
       {step === 1 && (
         <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 shadow-xs space-y-6">
           <div className="border-b border-slate-100 pb-4">
             <h2 className="text-lg font-bold text-slate-900 flex items-center space-x-2">
-              <BookOpen className="w-5 h-5 text-indigo-600" />
-              <span>Step 1: Academic & Examination Details</span>
+              <Camera className="w-5 h-5 text-indigo-600" />
+              <span>Step 1: Upload Textbook Pages & Extract Concepts</span>
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              Select standard educational board guidelines or create a customized examination.
+              Take photos or upload textbook pages. Groq AI Vision will read all paragraphs, diagrams, formulas, and exercise problems.
             </p>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-            {/* School / Institute Name */}
-            <div className="sm:col-span-2 lg:col-span-3">
-              <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                School / Institute / College Name
-              </label>
-              <input
-                type="text"
-                value={instituteName}
-                onChange={(e) => setInstituteName(e.target.value)}
-                placeholder="e.g. St. Xavier's Senior Secondary School"
-                className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-hidden"
-              />
+          {/* Upload Drop Zone */}
+          <div className="p-8 rounded-2xl border-2 border-dashed border-indigo-200 bg-indigo-50/30 hover:bg-indigo-50/50 transition-colors text-center space-y-4">
+            <div className="w-14 h-14 rounded-2xl bg-indigo-100 text-indigo-600 flex items-center justify-center mx-auto shadow-xs">
+              <FileUp className="w-7 h-7" />
             </div>
 
-            {/* Board */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                Education Board
-              </label>
-              <select
-                value={board}
-                onChange={(e) => setBoard(e.target.value)}
-                className="w-full px-3 py-2.5 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-hidden bg-white"
+            <div className="space-y-1">
+              <h3 className="font-bold text-base text-slate-900">
+                Upload Textbook Pages or Chapter Photos
+              </h3>
+              <p className="text-xs text-slate-500 max-w-md mx-auto">
+                Snap photos with your phone camera or select images (PNG, JPG, WebP). You can upload multiple pages of the same chapter.
+              </p>
+            </div>
+
+            {/* Hidden File Inputs */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept="image/*"
+              onChange={(e) => handleFileUpload(e.target.files)}
+              className="hidden"
+            />
+            <input
+              ref={cameraInputRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              onChange={(e) => handleFileUpload(e.target.files)}
+              className="hidden"
+            />
+
+            {/* Upload Buttons */}
+            <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="inline-flex items-center space-x-2 px-5 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-xs transition-colors"
               >
-                {BOARDS.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+                <ImageIcon className="w-4 h-4" />
+                <span>Choose Images from Device</span>
+              </button>
 
-            {/* Class */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                Class / Grade
-              </label>
-              <select
-                value={classLevel}
-                onChange={(e) => setClassLevel(e.target.value)}
-                className="w-full px-3 py-2.5 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-hidden bg-white"
+              <button
+                type="button"
+                onClick={() => cameraInputRef.current?.click()}
+                className="inline-flex items-center space-x-2 px-5 py-3 rounded-xl bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 font-bold text-xs shadow-2xs transition-colors"
               >
-                {CLASSES.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Subject */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                Subject
-              </label>
-              <select
-                value={subject}
-                onChange={(e) => {
-                  setSubject(e.target.value);
-                  setSelectedChapters([]);
-                }}
-                className="w-full px-3 py-2.5 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-hidden bg-white"
-              >
-                {Object.keys(SUBJECT_CHAPTERS).map((sub) => (
-                  <option key={sub} value={sub}>
-                    {sub}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Examination Type */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                Examination Type
-              </label>
-              <select
-                value={examType}
-                onChange={(e) => setExamType(e.target.value)}
-                className="w-full px-3 py-2.5 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-hidden bg-white"
-              >
-                {EXAM_TYPES.map((et) => (
-                  <option key={et} value={et}>
-                    {et}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Academic Year */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                Academic Year
-              </label>
-              <input
-                type="text"
-                value={academicYear}
-                onChange={(e) => setAcademicYear(e.target.value)}
-                placeholder="2026-2027"
-                className="w-full px-3 py-2.5 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-hidden"
-              />
-            </div>
-
-            {/* Language / Medium */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                Medium / Language
-              </label>
-              <select
-                value={language}
-                onChange={(e) => setLanguage(e.target.value)}
-                className="w-full px-3 py-2.5 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-hidden bg-white"
-              >
-                <option value="English">English</option>
-                <option value="Hindi">Hindi</option>
-                <option value="Bilingual (English + Hindi)">Bilingual (English + Hindi)</option>
-              </select>
+                <Camera className="w-4 h-4 text-indigo-600" />
+                <span>Capture Page with Camera</span>
+              </button>
             </div>
           </div>
 
-          <div className="pt-4 flex justify-end">
+          {/* Uploaded Pages Gallery */}
+          {uploadedImages.length > 0 && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                  Uploaded Textbook Pages ({uploadedImages.length}):
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUploadedImages([]);
+                    setAnalysisResult(null);
+                  }}
+                  className="text-xs text-red-500 hover:text-red-700 font-semibold"
+                >
+                  Clear All Pages
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3.5">
+                {uploadedImages.map((img, idx) => (
+                  <div
+                    key={img.id}
+                    className="group relative rounded-xl border border-slate-200 overflow-hidden bg-slate-900 shadow-xs flex flex-col justify-between"
+                  >
+                    <div className="relative aspect-3/4 overflow-hidden bg-slate-100 flex items-center justify-center">
+                      <img
+                        src={img.previewUrl}
+                        alt={img.name}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                      />
+                      <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md text-[10px] font-black bg-slate-900/80 text-white backdrop-blur-xs">
+                        Page {idx + 1}
+                      </span>
+
+                      <button
+                        type="button"
+                        onClick={() => setPreviewModalImg(img.previewUrl)}
+                        className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white"
+                      >
+                        <Eye className="w-6 h-6 drop-shadow" />
+                      </button>
+                    </div>
+
+                    <div className="p-2.5 bg-white flex items-center justify-between text-[11px] border-t border-slate-100">
+                      <span className="truncate max-w-[100px] text-slate-700 font-medium">
+                        {img.name}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveImage(img.id)}
+                        className="text-slate-400 hover:text-red-600 p-0.5"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Trigger Analysis Button */}
+              <div className="p-4 rounded-2xl bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200 flex flex-col sm:flex-row items-center justify-between gap-3">
+                <div className="space-y-0.5 text-center sm:text-left">
+                  <div className="font-bold text-xs text-indigo-950 flex items-center justify-center sm:justify-start space-x-1.5">
+                    <Sparkles className="w-4 h-4 text-indigo-600" />
+                    <span>Run AI Vision Analysis</span>
+                  </div>
+                  <p className="text-[11px] text-indigo-800">
+                    Groq AI analyzes concepts, formulas, solved examples, and figures on your uploaded pages.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={analyzingImages}
+                  onClick={handleAnalyzeImages}
+                  className="inline-flex items-center space-x-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-bold text-xs shadow-xs transition-colors shrink-0"
+                >
+                  {analyzingImages ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Analyzing Pages...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Scan className="w-3.5 h-3.5" />
+                      <span>Analyze Textbook Pages with AI</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Analysis Error Alert */}
+          {analysisError && (
+            <div className="p-3.5 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-start space-x-2">
+              <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+              <span>{analysisError}</span>
+            </div>
+          )}
+
+          {/* Analysis Findings */}
+          {analysisResult && (
+            <div className="p-5 rounded-2xl border border-indigo-200 bg-white shadow-xs space-y-4">
+              <div className="flex items-center space-x-2.5 border-b border-slate-100 pb-3">
+                <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold">
+                  <CheckCircle2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-sm text-slate-900">
+                    Textbook Pages Comprehension Complete
+                  </h4>
+                  <p className="text-[11px] text-slate-500">
+                    Extracted from {uploadedImages.length} uploaded page(s)
+                  </p>
+                </div>
+              </div>
+
+              {/* Editable Academic Details Form */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Subject</label>
+                  <input
+                    type="text"
+                    value={subject}
+                    onChange={(e) => setSubject(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Class / Grade</label>
+                  <input
+                    type="text"
+                    value={classLevel}
+                    onChange={(e) => setClassLevel(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Chapter / Unit Title</label>
+                  <input
+                    type="text"
+                    value={chapterTitle}
+                    onChange={(e) => setChapterTitle(e.target.value)}
+                    placeholder="Chapter Title"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white"
+                  />
+                </div>
+              </div>
+
+              {/* Summary */}
+              {analysisResult.summary && (
+                <div className="space-y-1">
+                  <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block">
+                    Pedagogical Summary:
+                  </span>
+                  <p className="text-xs text-slate-600 leading-relaxed bg-slate-50 p-3 rounded-xl border border-slate-100">
+                    {analysisResult.summary}
+                  </p>
+                </div>
+              )}
+
+              {/* Key Topics Extracted */}
+              {analysisResult.keyTopics && analysisResult.keyTopics.length > 0 && (
+                <div className="space-y-1.5">
+                  <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block">
+                    Extracted Core Topics:
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {analysisResult.keyTopics.map((topic, i) => (
+                      <span
+                        key={i}
+                        className="px-2.5 py-1 rounded-lg text-xs font-medium bg-indigo-50 text-indigo-800 border border-indigo-100"
+                      >
+                        ✓ {topic}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Formulas / Equations */}
+              {analysisResult.extractedFormulas && analysisResult.extractedFormulas.length > 0 && (
+                <div className="space-y-1.5">
+                  <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block">
+                    Formulas, Laws & Equations Found:
+                  </span>
+                  <div className="flex flex-wrap gap-2 text-xs font-mono text-amber-900 bg-amber-50/60 p-2.5 rounded-xl border border-amber-100">
+                    {analysisResult.extractedFormulas.map((form, i) => (
+                      <span key={i} className="bg-white/80 px-2 py-0.5 rounded border border-amber-200">
+                        {form}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Step 1 Footer Action */}
+          <div className="pt-4 flex justify-end border-t border-slate-100">
             <button
-              onClick={() => setStep(2)}
-              className="inline-flex items-center space-x-2 px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-sm shadow-xs transition-colors"
+              onClick={() => {
+                if (uploadedImages.length === 0) {
+                  setError('Please upload at least one textbook page image to proceed to Step 2.');
+                  return;
+                }
+                setError(null);
+                setStep(2);
+              }}
+              className="inline-flex items-center space-x-2 px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm shadow-xs transition-colors"
             >
-              <span>Next: Select Syllabus</span>
+              <span>Continue to Step 2: Marks & Sections</span>
               <ChevronRight className="w-4 h-4" />
             </button>
           </div>
         </div>
       )}
 
-      {/* STEP 2: SYLLABUS SCOPE */}
+      {/* STEP 2: MARKS DISTRIBUTION & SECTION BLUEPRINT */}
       {step === 2 && (
         <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 shadow-xs space-y-6">
           <div className="border-b border-slate-100 pb-4">
             <h2 className="text-lg font-bold text-slate-900 flex items-center space-x-2">
-              <Layers className="w-5 h-5 text-indigo-600" />
-              <span>Step 2: Syllabus & Chapter Selection</span>
-            </h2>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Specify complete curriculum, select individual units, or provide custom syllabus text.
-            </p>
-          </div>
-
-          {/* Scope Radios */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {[
-              { id: 'complete', title: 'Complete Syllabus', desc: 'All chapters prescribed by board' },
-              { id: 'chapters', title: 'Selected Chapters', desc: 'Pick specific units or periodic test chapters' },
-              { id: 'custom', title: 'Custom / Specific Topics', desc: 'Paste syllabus or chapter notes' },
-            ].map((opt) => (
-              <div
-                key={opt.id}
-                onClick={() => setSyllabusType(opt.id as any)}
-                className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                  syllabusType === opt.id
-                    ? 'border-indigo-600 bg-indigo-50/50 text-indigo-900'
-                    : 'border-slate-200 hover:border-slate-300 text-slate-700'
-                }`}
-              >
-                <div className="font-bold text-sm">{opt.title}</div>
-                <div className="text-xs text-slate-500 mt-0.5">{opt.desc}</div>
-              </div>
-            ))}
-          </div>
-
-          {/* Chapters Checklist */}
-          {(syllabusType === 'chapters' || syllabusType === 'complete') && (
-            <div className="space-y-3 pt-2">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                  Prescribed Chapters for {subject}:
-                </label>
-                <div className="space-x-2 text-xs">
-                  <button
-                    type="button"
-                    onClick={() => setSelectedChapters([...availableChapters])}
-                    className="text-indigo-600 font-semibold hover:underline"
-                  >
-                    Select All
-                  </button>
-                  <span className="text-slate-300">|</span>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedChapters([])}
-                    className="text-slate-500 font-semibold hover:underline"
-                  >
-                    Clear All
-                  </button>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-64 overflow-y-auto p-1">
-                {availableChapters.map((chap) => {
-                  const isChecked = selectedChapters.includes(chap);
-                  return (
-                    <div
-                      key={chap}
-                      onClick={() => toggleChapter(chap)}
-                      className={`flex items-center space-x-2.5 p-3 rounded-xl border text-xs font-medium cursor-pointer transition-colors ${
-                        isChecked
-                          ? 'border-indigo-300 bg-indigo-50/70 text-indigo-900'
-                          : 'border-slate-200 hover:border-slate-300 text-slate-700 bg-slate-50/50'
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={isChecked}
-                        onChange={() => {}}
-                        className="rounded-sm text-indigo-600 focus:ring-indigo-500 h-4 w-4"
-                      />
-                      <span className="truncate">{chap}</span>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Custom Chapter Tag Input */}
-              <form onSubmit={handleAddCustomChapter} className="flex gap-2 pt-2">
-                <input
-                  type="text"
-                  value={chapterInput}
-                  onChange={(e) => setChapterInput(e.target.value)}
-                  placeholder="Add custom chapter or topic name..."
-                  className="flex-1 px-3.5 py-2 text-xs border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-hidden"
-                />
-                <button
-                  type="submit"
-                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold"
-                >
-                  Add Chapter
-                </button>
-              </form>
-            </div>
-          )}
-
-          {/* Custom Syllabus Text Input */}
-          {syllabusType === 'custom' && (
-            <div className="space-y-2 pt-2">
-              <label className="block text-xs font-bold text-slate-700">
-                Paste Syllabus / Learning Outcomes / Specific Questions:
-              </label>
-              <textarea
-                rows={5}
-                value={customSyllabusText}
-                onChange={(e) => setCustomSyllabusText(e.target.value)}
-                placeholder="Paste your curriculum outline, chapter bullet points, or specific instructions for Gemini AI..."
-                className="w-full p-3.5 text-xs border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-hidden font-mono"
-              />
-            </div>
-          )}
-
-          <div className="pt-4 flex items-center justify-between border-t border-slate-100">
-            <button
-              onClick={() => setStep(1)}
-              className="inline-flex items-center space-x-1.5 px-4 py-2.5 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold text-xs"
-            >
-              <ChevronLeft className="w-4 h-4" />
-              <span>Back</span>
-            </button>
-
-            <button
-              onClick={() => setStep(3)}
-              className="inline-flex items-center space-x-2 px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-sm shadow-xs transition-colors"
-            >
-              <span>Next: Marks & Sections</span>
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* STEP 3: EXAM SETTINGS & INTELLIGENT MARKS DISTRIBUTION */}
-      {step === 3 && (
-        <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 shadow-xs space-y-6">
-          <div className="border-b border-slate-100 pb-4">
-            <h2 className="text-lg font-bold text-slate-900 flex items-center space-x-2">
               <Calculator className="w-5 h-5 text-indigo-600" />
-              <span>Step 3: Intelligent Marks Distribution & Section Blueprint</span>
+              <span>Step 2: Marks Distribution & Section Blueprint</span>
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
               Customize questions, marks per section, and verify automatic total calculations.
@@ -883,11 +1016,11 @@ export const GeneratePaperView: React.FC<GeneratePaperViewProps> = ({
           {/* Action Buttons */}
           <div className="pt-4 flex items-center justify-between border-t border-slate-100">
             <button
-              onClick={() => setStep(2)}
+              onClick={() => setStep(1)}
               className="inline-flex items-center space-x-1.5 px-4 py-2.5 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold text-xs"
             >
               <ChevronLeft className="w-4 h-4" />
-              <span>Back</span>
+              <span>Back to Step 1</span>
             </button>
 
             <button
@@ -896,7 +1029,7 @@ export const GeneratePaperView: React.FC<GeneratePaperViewProps> = ({
               className="inline-flex items-center space-x-2 px-7 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-sm shadow-md transition-all hover:scale-[1.02] active:scale-[0.98]"
             >
               <Sparkles className="w-4 h-4" />
-              <span>Generate with Paper Genius AI</span>
+              <span>Generate with Groq AI</span>
             </button>
           </div>
         </div>
@@ -922,8 +1055,8 @@ export const GeneratePaperView: React.FC<GeneratePaperViewProps> = ({
                 Generating Examination Paper
               </h3>
               <p className="text-xs text-slate-500 max-w-xs mx-auto">
-                {genStage === 1 && 'Ingesting board curriculum and syllabus standards...'}
-                {genStage === 2 && 'Synthesizing original questions & step-by-step solutions...'}
+                {genStage === 1 && `Reading and analyzing ${uploadedImages.length} textbook page(s) with Groq Vision...`}
+                {genStage === 2 && 'Synthesizing authentic questions strictly from textbook pages & step solutions...'}
                 {genStage >= 3 && 'Validating marks sum and stamping Ravi Kishan watermark...'}
               </p>
             </div>
@@ -939,7 +1072,121 @@ export const GeneratePaperView: React.FC<GeneratePaperViewProps> = ({
             </div>
 
             <div className="text-[11px] text-slate-400 font-medium">
-              Powered by Google Gemini 3.8 Flash • Paper Genius AI
+              Powered by Groq AI • Paper Genius AI
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* FULL-SCREEN TEXTBOOK IMAGE PREVIEW MODAL */}
+      {previewModalImg && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md">
+          <div className="relative max-w-4xl max-h-[90vh] bg-slate-900 rounded-2xl overflow-hidden shadow-2xl border border-slate-700 flex flex-col">
+            <div className="p-3 bg-slate-800 text-white flex items-center justify-between text-xs font-bold border-b border-slate-700">
+              <span className="flex items-center space-x-1.5">
+                <Camera className="w-4 h-4 text-indigo-400" />
+                <span>Textbook Page Preview</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setPreviewModalImg(null)}
+                className="p-1 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-2 overflow-auto flex items-center justify-center max-h-[80vh]">
+              <img
+                src={previewModalImg}
+                alt="Textbook Page"
+                className="max-h-[75vh] w-auto object-contain rounded-lg shadow-lg"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* GROQ API KEY CONFIGURATION & RATE LIMIT MODAL */}
+      {showKeyModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="w-full max-w-md bg-white rounded-2xl p-6 space-y-4 shadow-2xl border border-slate-200">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center space-x-2">
+                <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold">
+                  <Key className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-slate-900">
+                    {rateLimitNotice ? 'Groq API Limit Reached' : 'Configure Groq API Key'}
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Provide your personal key for uninterrupted generation
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowKeyModal(false)}
+                className="p-1 text-slate-400 hover:text-slate-700"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {rateLimitNotice && (
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 space-y-1">
+                <p className="font-bold flex items-center space-x-1">
+                  <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                  <span>Standard Groq Rate Limit Exceeded</span>
+                </p>
+                <p>
+                  You can upload your own free Groq API key to continue generating without waiting.
+                </p>
+              </div>
+            )}
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  Your Groq API Key (starts with gsk_...)
+                </label>
+                <input
+                  type="password"
+                  value={keyInput}
+                  onChange={(e) => setKeyInput(e.target.value)}
+                  placeholder="gsk_..."
+                  className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg outline-hidden focus:ring-2 focus:ring-indigo-500 font-mono"
+                />
+              </div>
+
+              <div className="text-[11px] text-slate-500 flex items-center justify-between">
+                <span>Don't have a key? It's free from Groq Console:</span>
+                <a
+                  href="https://console.groq.com/keys"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center space-x-0.5 text-indigo-600 hover:underline font-bold"
+                >
+                  <span>Get Free Key</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowKeyModal(false)}
+                  className="flex-1 py-2 text-xs font-semibold rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSaveGroqKey(keyInput)}
+                  className="flex-1 py-2 text-xs font-bold rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white"
+                >
+                  Save Key & Continue
+                </button>
+              </div>
             </div>
           </div>
         </div>

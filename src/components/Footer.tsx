@@ -31,7 +31,7 @@ export const Footer: React.FC<FooterProps> = ({ openApkModal, setCurrentTab }) =
             <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400 pt-2">
               <span className="inline-flex items-center space-x-1 bg-slate-800 px-2.5 py-1 rounded-md text-slate-300 border border-slate-700">
                 <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
-                <span>Google Gemini 3.8 Flash</span>
+                <span>Groq Llama 3.2 Vision AI</span>
               </span>
               <span className="inline-flex items-center space-x-1 bg-slate-800 px-2.5 py-1 rounded-md text-slate-300 border border-slate-700">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />

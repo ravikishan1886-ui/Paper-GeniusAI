@@ -13,6 +13,7 @@ import {
   Award,
   Calendar,
   CheckCircle2,
+  Camera,
 } from 'lucide-react';
 import { QuestionPaper } from '../types';
 import { exportPaperToPDF } from '../utils/pdfGenerator';
@@ -45,7 +46,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="space-y-4 max-w-2xl">
             <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full text-xs font-semibold bg-indigo-500/20 text-indigo-200 border border-indigo-400/30">
               <Sparkles className="w-3.5 h-3.5 text-indigo-300" />
-              <span>Next-Gen Examination Engine • Gemini AI</span>
+              <span>Next-Gen Examination Engine • Groq Vision AI</span>
             </div>
 
             <h1 className="text-3xl sm:text-4xl lg:text-5xl font-black tracking-tight text-white leading-tight">
@@ -69,8 +70,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </button>
 
               <button
+                onClick={() => onNavigate('generate')}
+                className="inline-flex items-center space-x-2 px-4 py-3 rounded-xl bg-indigo-700/60 hover:bg-indigo-700 text-white font-semibold text-sm border border-indigo-400/30 transition-colors"
+              >
+                <Camera className="w-4 h-4 text-purple-300" />
+                <span>Upload Textbook Pages</span>
+              </button>
+
+              <button
                 onClick={openApkModal}
-                className="inline-flex items-center space-x-2 px-4 py-3 rounded-xl bg-indigo-700/60 hover:bg-indigo-700 text-white font-semibold text-sm border border-indigo-500/40 transition-colors"
+                className="inline-flex items-center space-x-2 px-4 py-3 rounded-xl bg-slate-800/80 hover:bg-slate-800 text-white font-semibold text-sm border border-slate-700/50 transition-colors"
               >
                 <Smartphone className="w-4 h-4 text-emerald-400" />
                 <span>Get Android APK</span>
@@ -200,9 +209,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <div className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold">
               <Sparkles className="w-5 h-5" />
             </div>
-            <h3 className="font-bold text-sm text-slate-900">Gemini 3.8 Flash AI</h3>
+            <h3 className="font-bold text-sm text-slate-900">Groq Vision AI Engine</h3>
             <p className="text-xs text-slate-600 leading-relaxed">
-              Generates high-order thinking (HOTS), competency-based, assertion-reason, and numerical problems using verified curricula.
+              Analyzes uploaded textbook pages and generates HOTS, competency-based, and numerical problems with ultra-low latency.
             </p>
           </div>
 
