@@ -11,9 +11,12 @@ import {
   AlertTriangle,
   PlusCircle,
   Key,
+  Eye,
+  Printer,
 } from 'lucide-react';
 import { QuestionPaper } from '../types';
 import { exportPaperToPDF } from '../utils/pdfGenerator';
+import { PrintPreviewModal } from '../components/PrintPreviewModal';
 
 interface MyPapersViewProps {
   papers: QuestionPaper[];
@@ -33,6 +36,7 @@ export const MyPapersView: React.FC<MyPapersViewProps> = ({
   const [search, setSearch] = useState('');
   const [selectedSubject, setSelectedSubject] = useState('all');
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [previewPaper, setPreviewPaper] = useState<QuestionPaper | null>(null);
 
   // Extract unique subjects
   const subjects = Array.from(new Set(papers.map((p) => p.subject).filter(Boolean)));
@@ -167,6 +171,14 @@ export const MyPapersView: React.FC<MyPapersViewProps> = ({
                   </button>
 
                   <button
+                    onClick={() => setPreviewPaper(paper)}
+                    title="Print Preview (Simulate A4 printed paper before printing)"
+                    className="p-2 rounded-xl border border-indigo-200 bg-indigo-50/70 text-indigo-700 hover:bg-indigo-100 transition-colors"
+                  >
+                    <Eye className="w-4 h-4 text-indigo-600" />
+                  </button>
+
+                  <button
                     onClick={() => exportPaperToPDF(paper, { type: 'question_paper' })}
                     title="Download Question Paper PDF (Watermark: Ravi Kishan)"
                     className="p-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors"
@@ -228,6 +240,16 @@ export const MyPapersView: React.FC<MyPapersViewProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Print Preview Modal for Selected Paper */}
+      {previewPaper && (
+        <PrintPreviewModal
+          isOpen={!!previewPaper}
+          onClose={() => setPreviewPaper(null)}
+          paper={previewPaper}
+          watermarkConfig={previewPaper.watermark}
+        />
       )}
     </div>
   );

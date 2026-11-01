@@ -18,10 +18,12 @@ import {
   HelpCircle,
   CheckCircle2,
   Share2,
+  Eye,
 } from 'lucide-react';
 import { QuestionPaper, Question, QuestionType, AnswerItem } from '../types';
 import { exportPaperToPDF } from '../utils/pdfGenerator';
 import { WatermarkOverlay } from '../components/WatermarkOverlay';
+import { PrintPreviewModal } from '../components/PrintPreviewModal';
 
 interface PaperEditorViewProps {
   paper: QuestionPaper;
@@ -42,6 +44,7 @@ export const PaperEditorView: React.FC<PaperEditorViewProps> = ({
   const [editingQId, setEditingQId] = useState<string | null>(null);
   const [regeneratingQId, setRegeneratingQId] = useState<string | null>(null);
   const [saveSuccessNotice, setSaveSuccessNotice] = useState(false);
+  const [isPrintPreviewOpen, setIsPrintPreviewOpen] = useState(false);
 
   // Push state to undo history
   const updatePaperWithHistory = (newPaper: QuestionPaper) => {
@@ -351,9 +354,19 @@ export const PaperEditorView: React.FC<PaperEditorViewProps> = ({
             <Copy className="w-4 h-4" />
           </button>
 
+          {/* Print Preview Button */}
           <button
-            onClick={() => window.print()}
-            title="Print Document"
+            onClick={() => setIsPrintPreviewOpen(true)}
+            className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold transition-all shadow-2xs cursor-pointer"
+            title="Preview document on A4 paper before sending to printer"
+          >
+            <Eye className="w-3.5 h-3.5 text-indigo-600" />
+            <span>Print Preview</span>
+          </button>
+
+          <button
+            onClick={() => setIsPrintPreviewOpen(true)}
+            title="Print Document (Opens Preview)"
             className="p-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors"
           >
             <Printer className="w-4 h-4" />
@@ -684,6 +697,15 @@ export const PaperEditorView: React.FC<PaperEditorViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Real-time A4 Print Preview Modal */}
+      <PrintPreviewModal
+        isOpen={isPrintPreviewOpen}
+        onClose={() => setIsPrintPreviewOpen(false)}
+        paper={paper}
+        initialTab={activeTab}
+        watermarkConfig={paper.watermark}
+      />
     </div>
   );
 };
