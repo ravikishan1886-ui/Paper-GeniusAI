@@ -1,0 +1,6 @@
+{
+  "name": "Paper Genius AI",
+  "description": "Create Smarter Question Papers in Seconds. Professional AI-powered exam paper generator with intelligent marks distribution, answer keys, solutions, and PDF export with watermark.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
