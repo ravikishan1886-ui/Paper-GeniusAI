@@ -22,56 +22,87 @@ function getGroqKey(req: express.Request): string | null {
   return process.env.GROQ_API_KEY || null;
 }
 
-// Call Groq API with OpenAI-compatible chat completions endpoint
+// Supported active Groq models (as of current Groq API catalog)
+// Multimodal / Vision: qwen/qwen3.8-27b
+// Text generation: openai/gpt-oss-120b, qwen/qwen3.8-27b, openai/gpt-oss-20b
+const GROQ_VISION_MODELS = ['qwen/qwen3.8-27b'];
+const GROQ_TEXT_MODELS = ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-20b'];
+
+// Call Groq API with OpenAI-compatible chat completions endpoint and multi-model fallback
 async function callGroqChat({
   apiKey,
   model,
+  fallbackModels = [],
   messages,
   temperature = 0.2,
   responseFormat = { type: 'json_object' },
 }: {
   apiKey: string;
   model: string;
+  fallbackModels?: string[];
   messages: any[];
   temperature?: number;
   responseFormat?: any;
 }): Promise<string> {
-  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model,
-      messages,
-      temperature,
-      response_format: responseFormat,
-    }),
-  });
+  const modelsToTry = [model, ...fallbackModels.filter(m => m !== model)];
+  let lastError: any = null;
 
-  if (res.status === 429) {
-    const errorBody = await res.json().catch(() => ({}));
-    const errorMsg = errorBody?.error?.message || 'Groq API rate limit reached. Please provide your own Groq API key.';
-    const err = new Error(errorMsg);
-    (err as any).status = 429;
-    (err as any).rateLimitExceeded = true;
-    throw err;
-  }
+  for (const m of modelsToTry) {
+    try {
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: m,
+          messages,
+          temperature,
+          response_format: responseFormat,
+        }),
+      });
 
-  if (!res.ok) {
-    const errorBody = await res.json().catch(() => ({}));
-    const errorMsg = errorBody?.error?.message || `Groq API responded with HTTP ${res.status}`;
-    const err = new Error(errorMsg);
-    (err as any).status = res.status;
-    if (res.status === 429 || errorMsg.toLowerCase().includes('rate limit')) {
-      (err as any).rateLimitExceeded = true;
+      if (res.status === 429) {
+        const errorBody = await res.json().catch(() => ({}));
+        const errorMsg = errorBody?.error?.message || 'Groq API rate limit reached. Please provide your own Groq API key.';
+        const err = new Error(errorMsg);
+        (err as any).status = 429;
+        (err as any).rateLimitExceeded = true;
+        throw err;
+      }
+
+      if (!res.ok) {
+        const errorBody = await res.json().catch(() => ({}));
+        const errorMsg = errorBody?.error?.message || `Groq API responded with HTTP ${res.status}`;
+        const err = new Error(errorMsg);
+        (err as any).status = res.status;
+        if (res.status === 429 || errorMsg.toLowerCase().includes('rate limit')) {
+          (err as any).rateLimitExceeded = true;
+          throw err;
+        }
+
+        // If model decommissioned (400) or not found (404), record and try next model
+        if (res.status === 400 || res.status === 404) {
+          lastError = err;
+          console.warn(`Groq model '${m}' failed with HTTP ${res.status}: ${errorMsg}. Trying next model...`);
+          continue;
+        }
+        throw err;
+      }
+
+      const json = await res.json();
+      return json.choices?.[0]?.message?.content || '{}';
+    } catch (err: any) {
+      if (err.rateLimitExceeded) {
+        throw err;
+      }
+      lastError = err;
+      console.warn(`Groq request with model '${m}' failed: ${err.message}`);
     }
-    throw err;
   }
 
-  const json = await res.json();
-  return json.choices?.[0]?.message?.content || '{}';
+  throw lastError || new Error('All candidate Groq models failed.');
 }
 
 // Health check endpoint
@@ -148,7 +179,8 @@ Return ONLY valid JSON matching this exact structure:
 
         const raw = await callGroqChat({
           apiKey: groqKey,
-          model: 'llama-3.2-11b-vision-preview',
+          model: GROQ_VISION_MODELS[0],
+          fallbackModels: GROQ_VISION_MODELS.slice(1),
           messages: [
             {
               role: 'user',
@@ -349,10 +381,12 @@ STRICT ACADEMIC GUIDELINES:
 }`;
 
         let contentParts: any = promptText;
-        let chosenModel = 'llama-3.3-70b-versatile';
+        let chosenModel = GROQ_TEXT_MODELS[0];
+        let fallbackList: string[] = GROQ_TEXT_MODELS.slice(1);
 
         if (hasTextbookImages) {
-          chosenModel = 'llama-3.2-11b-vision-preview';
+          chosenModel = GROQ_VISION_MODELS[0];
+          fallbackList = GROQ_VISION_MODELS.slice(1);
           contentParts = [{ type: 'text', text: promptText }];
           for (const img of textbookImages) {
             const rawData = (img.data || '').replace(/^data:image\/\w+;base64,/, '');
@@ -369,6 +403,7 @@ STRICT ACADEMIC GUIDELINES:
         const rawText = await callGroqChat({
           apiKey: groqKey,
           model: chosenModel,
+          fallbackModels: fallbackList,
           messages: [
             {
               role: 'user',
@@ -521,7 +556,8 @@ Return JSON matching:
 
         const raw = await callGroqChat({
           apiKey: groqKey,
-          model: 'llama-3.3-70b-versatile',
+          model: GROQ_TEXT_MODELS[0],
+          fallbackModels: GROQ_TEXT_MODELS.slice(1),
           messages: [{ role: 'user', content: prompt }],
         });
 
